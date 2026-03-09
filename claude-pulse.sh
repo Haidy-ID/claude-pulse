@@ -30,6 +30,14 @@ now_s=$(date +%s)
 IS_MAC=false
 [[ "$OSTYPE" == "darwin"* ]] && IS_MAC=true
 
+# Language: set CLAUDE_PULSE_LANG=en or fr (auto-detect from LANG/LC_TIME)
+if [ -z "$CLAUDE_PULSE_LANG" ]; then
+    case "${LC_TIME:-${LANG:-en}}" in
+        fr*) CLAUDE_PULSE_LANG="fr" ;;
+        *)   CLAUDE_PULSE_LANG="en" ;;
+    esac
+fi
+
 # === HELPERS ===
 safe_int() {
     local val="${1:-0}"
@@ -97,13 +105,21 @@ parse_epoch() {
     fi
 }
 
-fr_day() {
+day_name() {
     local dow=$(epoch_fmt "$1" "%u")
-    case "$dow" in
-        1) echo "Lun." ;; 2) echo "Mar." ;; 3) echo "Mer." ;;
-        4) echo "Jeu." ;; 5) echo "Ven." ;; 6) echo "Sam." ;; 7) echo "Dim." ;;
-        *) echo "?" ;;
-    esac
+    if [ "$CLAUDE_PULSE_LANG" = "fr" ]; then
+        case "$dow" in
+            1) echo "Lun." ;; 2) echo "Mar." ;; 3) echo "Mer." ;;
+            4) echo "Jeu." ;; 5) echo "Ven." ;; 6) echo "Sam." ;; 7) echo "Dim." ;;
+            *) echo "?" ;;
+        esac
+    else
+        case "$dow" in
+            1) echo "Mon" ;; 2) echo "Tue" ;; 3) echo "Wed" ;;
+            4) echo "Thu" ;; 5) echo "Fri" ;; 6) echo "Sat" ;; 7) echo "Sun" ;;
+            *) echo "?" ;;
+        esac
+    fi
 }
 
 # === PARSE STATUS JSON ===
@@ -264,17 +280,18 @@ week_pct=$(parse_utilization "$raw_7d")
 week_color=$(gauge_color "$week_pct")
 
 # 7d label + reset day
-label_7d="7j"
+_d="d"; [ "$CLAUDE_PULSE_LANG" = "fr" ] && _d="j"
+label_7d="7${_d}"
 label_7d_reset=""
 reset_epoch=$(parse_epoch "$resets_7d")
 if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt 0 ] 2>/dev/null; then
     diff_secs=$((reset_epoch - now_s))
     if [ "$diff_secs" -gt 0 ]; then
-        label_7d="$((diff_secs / 86400))j"
+        label_7d="$((diff_secs / 86400))${_d}"
     else
-        label_7d="0j"
+        label_7d="0${_d}"
     fi
-    reset_day=$(fr_day "$reset_epoch")
+    reset_day=$(day_name "$reset_epoch")
     if [ "$diff_secs" -lt 172800 ]; then
         label_7d_reset=" ${reset_day} $(epoch_fmt "$reset_epoch" "%Hh%M")"
     else
