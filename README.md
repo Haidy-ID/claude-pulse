@@ -72,6 +72,19 @@ curl -sS https://raw.githubusercontent.com/Haidy-ID/claude-pulse/main/claude-pul
 | `29%` | Weekly quota used |
 | `Ven.` | Weekly reset day (< 48h shows exact time) |
 
+## Under the hood
+
+Stuff you didn't ask for but we built anyway:
+
+- **Spike damping** — If the API returns a +30% jump out of nowhere, pulse ignores it and waits for confirmation on the next read. One bad API response won't make you panic
+- **Atomic file writes** — Cache and state files are written to a temp file then `mv`'d into place. Two concurrent status line refreshes can't corrupt each other
+- **Pulse animation** — Above 80% on the 5h gauge, the red color alternates between coral and deep red every second. Subtle enough to not be annoying, visible enough to feel the heat
+- **48h precision mode** — The weekly reset shows the day name (`Ven.`), but when you're under 48h it switches to exact time (`Ven. 08h00`). Because "Friday" is vague when it's Thursday night
+- **Dynamic countdown** — The `5h` label isn't static — it's a live countdown (`2h44`, `0h12`). Same for `7d` which shows days remaining (`3j`, `1j`)
+- **Auto-compact model name** — `Claude Opus 4.6` becomes `Opus`. You know what model you're using, you don't need the full résumé
+- **`timeout` fallback** — Git Bash on Windows doesn't always have `timeout`. Pulse detects this and skips it instead of hanging
+- **Locale-free French days** — Day names (`Lun.`, `Mar.`, `Ven.`) are hardcoded from `%u` weekday numbers. Works on any system, no `fr_FR.UTF-8` locale needed
+
 ## How it works
 
 1. Reads Claude Code's status JSON from stdin (built-in hook)
