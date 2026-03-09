@@ -11,21 +11,24 @@ if [ -z "$input" ]; then
     exit 0
 fi
 
-# === TRUE COLOR PALETTE (24-bit RGB) ===
+# === PALETTE ===
 R="\033[0m"
 B="\033[1m"
-
-c_model="\033[38;2;255;255;255m"   # white
-c_warn="\033[38;2;251;191;36m"     # amber
-c_bad="\033[38;2;248;113;113m"     # coral
+c_white="\033[38;2;255;255;255m"
+c_warn="\033[38;2;251;191;36m"     # amber (>50%)
+c_bad="\033[38;2;248;113;113m"     # coral (>80%)
 c_crit="\033[38;2;220;60;60m"      # deep red (pulse)
 c_sep="\033[38;2;75;85;99m"        # cool gray
 c_dim="\033[38;2;107;114;128m"     # muted gray
-c_white="\033[38;2;255;255;255m"
 
 SEP=" ${c_sep}│${R} "
+EMPTY_USAGE='{"five_hour":{"utilization":0,"resets_at":""},"seven_day":{"utilization":0,"resets_at":""}}'
 
 now_s=$(date +%s)
+
+# Detect OS once
+IS_MAC=false
+[[ "$OSTYPE" == "darwin"* ]] && IS_MAC=true
 
 # === HELPERS ===
 safe_int() {
@@ -46,39 +49,13 @@ gauge_color() {
     fi
 }
 
-fr_day() {
-    local epoch=$1 dow
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        dow=$(date -j -f "%s" "$epoch" +%u 2>/dev/null)
-    else
-        dow=$(date -d "@$epoch" +%u 2>/dev/null)
-    fi
-    case "$dow" in
-        1) echo "Lun." ;; 2) echo "Mar." ;; 3) echo "Mer." ;;
-        4) echo "Jeu." ;; 5) echo "Ven." ;; 6) echo "Sam." ;; 7) echo "Dim." ;;
-        *) echo "?" ;;
-    esac
-}
-
-format_time() {
-    local epoch=$1
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        date -j -f "%s" "$epoch" +%Hh%M 2>/dev/null
-    else
-        date -d "@$epoch" +%Hh%M 2>/dev/null
-    fi
-}
-
 parse_utilization() {
-    local raw="$1"
-    raw="${raw//[[:space:]]/}"
-    [ -z "$raw" ] || [ "$raw" = "null" ] && raw=0
-    awk "BEGIN {
-        v = $raw + 0
-        if (v > 100) printf \"100\"
-        else if (v < 0) printf \"0\"
-        else printf \"%d\", v
-    }"
+    local v="${1//[[:space:]]/}"
+    [[ -z "$v" || "$v" == "null" ]] && v=0
+    v=${v%%.*}
+    (( v > 100 )) && v=100
+    (( v < 0 )) && v=0
+    printf "%d" "$v"
 }
 
 format_tokens() {
@@ -86,9 +63,26 @@ format_tokens() {
     if [ "$t" -ge 1000000 ] 2>/dev/null; then
         awk "BEGIN {v=$t/1000000; if (v==int(v)) printf \"%dM\",v; else printf \"%.1fM\",v}"
     elif [ "$t" -ge 1000 ] 2>/dev/null; then
-        awk "BEGIN {printf \"%dk\", $t/1000}"
+        printf "%dk" "$((t / 1000))"
     else
         printf "%d" "$t"
+    fi
+}
+
+file_mtime() {
+    if $IS_MAC; then
+        stat -f %m "$1" 2>/dev/null
+    else
+        stat -c %Y "$1" 2>/dev/null
+    fi
+}
+
+epoch_fmt() {
+    local epoch=$1 fmt=$2
+    if $IS_MAC; then
+        date -j -f "%s" "$epoch" +"$fmt" 2>/dev/null
+    else
+        date -d "@$epoch" +"$fmt" 2>/dev/null
     fi
 }
 
@@ -96,18 +90,26 @@ parse_epoch() {
     local raw="$1"
     [ -z "$raw" ] || [ "$raw" = "null" ] && return 1
     local clean=$(echo "$raw" | sed 's/\.[0-9]*//; s/+00:00$//; s/Z$//')
-    if [[ "$OSTYPE" == "darwin"* ]]; then
+    if $IS_MAC; then
         TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$clean" +%s 2>/dev/null
     else
         date -u -d "${clean}Z" +%s 2>/dev/null
     fi
 }
 
-# === PARSE JSON ===
+fr_day() {
+    local dow=$(epoch_fmt "$1" "%u")
+    case "$dow" in
+        1) echo "Lun." ;; 2) echo "Mar." ;; 3) echo "Mer." ;;
+        4) echo "Jeu." ;; 5) echo "Ven." ;; 6) echo "Sam." ;; 7) echo "Dim." ;;
+        *) echo "?" ;;
+    esac
+}
+
+# === PARSE STATUS JSON ===
 json_data=$(echo "$input" | jq -r '
     [
         (.context_window.used_percentage // -1),
-        (.context_window.remaining_percentage // -1),
         (.context_window.context_window_size // 200000),
         (.model.display_name // .model.id // "Unknown")
     ] | @tsv
@@ -118,7 +120,7 @@ if [ -z "$json_data" ]; then
     exit 0
 fi
 
-IFS=$'\t' read -r ctx_pct_raw ctx_remaining_raw ctx_size_raw model_name <<< "$json_data"
+IFS=$'\t' read -r ctx_pct_raw ctx_size_raw model_name <<< "$json_data"
 
 ctx_pct=$(safe_int "$ctx_pct_raw")
 [ "$ctx_pct" -lt 0 ] 2>/dev/null && ctx_pct=0
@@ -130,7 +132,7 @@ used_tokens=$((ctx_size * ctx_pct / 100))
 ctx_display="$(format_tokens "$used_tokens")·$(format_tokens "$ctx_size")"
 ctx_color=$(gauge_color "$ctx_pct")
 
-# === MODEL NAME (compact) ===
+# Model name: "Claude Opus 4.6" → "Opus"
 [ -z "$model_name" ] || [ "$model_name" = "null" ] && model_name="?"
 model_short="${model_name#Claude }"
 model_short="${model_short%% *}"
@@ -146,11 +148,7 @@ fi
 VERSION_CACHE="$HOME/.claude/version-cache.txt"
 claude_version="unknown"
 if [ -f "$VERSION_CACHE" ]; then
-    if stat --version >/dev/null 2>&1; then
-        vt=$(stat -c %Y "$VERSION_CACHE" 2>/dev/null)
-    else
-        vt=$(stat -f %m "$VERSION_CACHE" 2>/dev/null)
-    fi
+    vt=$(file_mtime "$VERSION_CACHE")
     vt=${vt:-0}
     [ $(( now_s - vt )) -lt 3600 ] && claude_version=$(cat "$VERSION_CACHE")
 fi
@@ -171,11 +169,7 @@ get_real_usage() {
     local cache_age=9999
     if [ -f "$CACHE_FILE" ]; then
         local cache_time
-        if stat --version >/dev/null 2>&1; then
-            cache_time=$(stat -c %Y "$CACHE_FILE" 2>/dev/null)
-        else
-            cache_time=$(stat -f %m "$CACHE_FILE" 2>/dev/null)
-        fi
+        cache_time=$(file_mtime "$CACHE_FILE")
         cache_time=${cache_time:-0}
         cache_age=$(( now_s - cache_time ))
     fi
@@ -186,7 +180,7 @@ get_real_usage() {
     fi
 
     local creds_json=""
-    if [[ "$OSTYPE" == "darwin"* ]]; then
+    if $IS_MAC; then
         creds_json=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
     else
         local creds_file="$HOME/.claude/.credentials.json"
@@ -194,14 +188,14 @@ get_real_usage() {
     fi
 
     if [ -z "$creds_json" ]; then
-        echo '{"five_hour":{"utilization":0,"resets_at":""},"seven_day":{"utilization":0,"resets_at":""}}'
+        echo "$EMPTY_USAGE"
         return
     fi
 
     local token
     token=$(echo "$creds_json" | jq -r '.claudeAiOauth.accessToken // ""' 2>/dev/null)
     if [ -z "$token" ] || [ "$token" = "null" ]; then
-        echo '{"five_hour":{"utilization":0,"resets_at":""},"seven_day":{"utilization":0,"resets_at":""}}'
+        echo "$EMPTY_USAGE"
         return
     fi
 
@@ -221,17 +215,24 @@ get_real_usage() {
     elif [ -f "$CACHE_FILE" ]; then
         cat "$CACHE_FILE"
     else
-        echo '{"five_hour":{"utilization":0,"resets_at":""},"seven_day":{"utilization":0,"resets_at":""}}'
+        echo "$EMPTY_USAGE"
     fi
 }
 
 usage_data=$(get_real_usage)
 
+# Extract all usage fields in one jq call
+IFS=$'\t' read -r raw_5h resets_5h raw_7d resets_7d <<< "$(echo "$usage_data" | jq -r '
+    [
+        (.five_hour.utilization // 0),
+        (.five_hour.resets_at // ""),
+        (.seven_day.utilization // 0),
+        (.seven_day.resets_at // "")
+    ] | @tsv
+' 2>/dev/null)"
+
 # === 5h GAUGE ===
-plan_pct=$(parse_utilization "$(echo "$usage_data" | jq -r '.five_hour.utilization // 0' 2>/dev/null)")
-[ -z "$plan_pct" ] && plan_pct=0
-[ "$plan_pct" -lt 0 ] 2>/dev/null && plan_pct=0
-[ "$plan_pct" -gt 100 ] 2>/dev/null && plan_pct=100
+plan_pct=$(parse_utilization "$raw_5h")
 
 # Spike damping
 if [ "$prev_plan" -gt 0 ] 2>/dev/null; then
@@ -240,7 +241,7 @@ fi
 
 # 5h label (time remaining)
 label_5h="5h"
-reset_epoch=$(parse_epoch "$(echo "$usage_data" | jq -r '.five_hour.resets_at // ""' 2>/dev/null)")
+reset_epoch=$(parse_epoch "$resets_5h")
 if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt 0 ] 2>/dev/null; then
     diff_secs=$((reset_epoch - now_s))
     if [ "$diff_secs" -gt 0 ]; then
@@ -250,7 +251,7 @@ if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt 0 ] 2>/dev/null; then
     fi
 fi
 
-# 5h color
+# 5h color (with pulse animation above 80%)
 pulse_frame=$(( now_s % 2 ))
 if [ "$plan_pct" -lt 50 ] 2>/dev/null; then plan_color="$c_white"
 elif [ "$plan_pct" -lt 80 ] 2>/dev/null; then plan_color="$c_warn"
@@ -259,16 +260,13 @@ else
 fi
 
 # === 7d GAUGE ===
-week_pct=$(parse_utilization "$(echo "$usage_data" | jq -r '.seven_day.utilization // 0' 2>/dev/null)")
-[ -z "$week_pct" ] && week_pct=0
-[ "$week_pct" -lt 0 ] 2>/dev/null && week_pct=0
-[ "$week_pct" -gt 100 ] 2>/dev/null && week_pct=100
+week_pct=$(parse_utilization "$raw_7d")
 week_color=$(gauge_color "$week_pct")
 
 # 7d label + reset day
 label_7d="7j"
 label_7d_reset=""
-reset_epoch=$(parse_epoch "$(echo "$usage_data" | jq -r '.seven_day.resets_at // ""' 2>/dev/null)")
+reset_epoch=$(parse_epoch "$resets_7d")
 if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt 0 ] 2>/dev/null; then
     diff_secs=$((reset_epoch - now_s))
     if [ "$diff_secs" -gt 0 ]; then
@@ -278,7 +276,7 @@ if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt 0 ] 2>/dev/null; then
     fi
     reset_day=$(fr_day "$reset_epoch")
     if [ "$diff_secs" -lt 172800 ]; then
-        label_7d_reset=" ${reset_day} $(format_time "$reset_epoch")"
+        label_7d_reset=" ${reset_day} $(epoch_fmt "$reset_epoch" "%Hh%M")"
     else
         label_7d_reset=" ${reset_day}"
     fi
@@ -300,4 +298,4 @@ for ((i=filled; i<bar_length; i++)); do progress_bar+="${c_dim}░"; done
 progress_bar+="${R}"
 
 # === OUTPUT ===
-printf "%b" "${c_model}● ${B}${model_short}${R}${SEP}${c_dim}${ctx_display} ${ctx_color}${B}${ctx_pct}%${R}${SEP}${c_dim}${label_5h} ${plan_color}${B}${plan_pct}%${R} ${progress_bar}${R}${SEP}${c_dim}${label_7d} ${week_color}${B}${week_pct}%${R}${label_7d_reset:+${c_dim}${label_7d_reset}}${R}"
+printf "%b" "${c_white}● ${B}${model_short}${R}${SEP}${c_dim}${ctx_display} ${ctx_color}${B}${ctx_pct}%${R}${SEP}${c_dim}${label_5h} ${plan_color}${B}${plan_pct}%${R} ${progress_bar}${R}${SEP}${c_dim}${label_7d} ${week_color}${B}${week_pct}%${R}${label_7d_reset:+${c_dim}${label_7d_reset}}${R}"
