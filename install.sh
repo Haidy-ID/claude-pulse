@@ -1,10 +1,10 @@
 #!/bin/bash
 # claude-pulse installer
-# Usage: curl -sS https://raw.githubusercontent.com/lunndev/claude-pulse/main/install.sh | bash
+# Usage: curl -sS https://raw.githubusercontent.com/Haidy-ID/claude-pulse/main/install.sh | bash
 
 set -e
 
-REPO_URL="https://raw.githubusercontent.com/lunndev/claude-pulse/main/claude-pulse.sh"
+REPO_URL="https://raw.githubusercontent.com/Haidy-ID/claude-pulse/main/claude-pulse.sh"
 INSTALL_DIR="$HOME/.claude"
 SCRIPT_NAME="claude-pulse.sh"
 SETTINGS_FILE="$INSTALL_DIR/settings.json"

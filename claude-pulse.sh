@@ -1,6 +1,6 @@
 #!/bin/bash
 # claude-pulse — Status line for Claude Code
-# https://github.com/lunndev/claude-pulse
+# https://github.com/Haidy-ID/claude-pulse
 #
 # Layout: ● Model │ used·total XX% │ Xh XX% [████░░░░] │ Xj XX% Day
 

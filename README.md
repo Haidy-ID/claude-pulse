@@ -23,7 +23,7 @@
 ## Install
 
 ```bash
-curl -sS https://raw.githubusercontent.com/lunndev/claude-pulse/main/install.sh | bash
+curl -sS https://raw.githubusercontent.com/Haidy-ID/claude-pulse/main/install.sh | bash
 ```
 
 Restart Claude Code. That's it.
@@ -32,7 +32,7 @@ Restart Claude Code. That's it.
 
 ```bash
 # Download
-curl -sS https://raw.githubusercontent.com/lunndev/claude-pulse/main/claude-pulse.sh -o ~/.claude/claude-pulse.sh
+curl -sS https://raw.githubusercontent.com/Haidy-ID/claude-pulse/main/claude-pulse.sh -o ~/.claude/claude-pulse.sh
 
 # Enable
 # Add to ~/.claude/settings.json:
@@ -82,7 +82,7 @@ No background processes. No daemon. No config files to maintain. It's a bash scr
 
 ## Credits
 
-Built by [Lünn](https://github.com/lunndev) during a late night Claude Code session. The irony of using Claude to build a Claude monitoring tool is not lost on us.
+Built by [Lünn](https://github.com/Haidy-ID) during a late night Claude Code session. The irony of using Claude to build a Claude monitoring tool is not lost on us.
 
 ## License
 
