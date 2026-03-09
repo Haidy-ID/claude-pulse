@@ -2,14 +2,7 @@
 
 > The vital signs of your Claude Code session. Because flying blind with a rate limit is like playing Dark Souls without the health bar.
 
-```
-● Opus │ 60k·200k 30% │ 4h12 2% ██░░░░░░ │ 4j 27% Ven.
-  │          │              │                  │
-  │          │              │                  └─ Weekly quota + reset day
-  │          │              └─ Rate limit + countdown + progress bar
-  │          └─ Context tokens used · total + percentage
-  └─ Active model
-```
+![claude-pulse screenshot](screenshot.png)
 
 ## What you get
 
