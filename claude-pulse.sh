@@ -145,7 +145,7 @@ ctx_size=$(safe_int "$ctx_size_raw")
 [ "$ctx_size" -le 0 ] 2>/dev/null && ctx_size=200000
 
 used_tokens=$((ctx_size * ctx_pct / 100))
-ctx_display="$(format_tokens "$used_tokens")·$(format_tokens "$ctx_size")"
+ctx_display="$(format_tokens "$used_tokens")/$(format_tokens "$ctx_size")"
 ctx_color=$(gauge_color "$ctx_pct")
 
 # Model name: "Claude Opus 4.6" → "Opus"
@@ -298,6 +298,7 @@ if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt 0 ] 2>/dev/null; then
         label_7d_reset=" ${reset_day}"
     fi
 fi
+
 
 # === PERSIST STATE (atomic) ===
 _tmp="${STATE_FILE}.tmp.$$"
