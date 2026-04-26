@@ -9,6 +9,7 @@ Codex does not expose a Claude-style `statusline` shell hook. `codex-pulse` read
 - **Model** - latest active Codex model for the current project
 - **Execution mode** - Fast/Flex service tier when enabled
 - **Thinking mode** - current Codex reasoning effort (`low`, `medium`, `high`, `xhigh`)
+- **Permission mode** - `Ask`, `Bypass`, or `Plan`
 - **Context estimate** - latest turn token usage vs model context window
 - **5h limit** - primary rolling usage window with reset countdown and bar
 - **Weekly limit** - secondary rolling usage window with reset countdown and reset day
@@ -17,7 +18,7 @@ Codex does not expose a Claude-style `statusline` shell hook. `codex-pulse` read
 Example:
 
 ```text
-● gpt-5.5 · Fast · Think xhigh │ 125k/258k 48% │ 3h41 33% ██░░░░░░ │ 2d 46% Tue
+● gpt-5.5 · Fast · Think xhigh · Ask │ 204k/258k 79% │ 3h32 38% ███░░░░░ │ 2d 47% Tue
 ```
 
 ## Install
@@ -54,6 +55,7 @@ Useful overrides:
 ```bash
 CODEX_PULSE_SERVICE_TIER=fast ~/.codex/codex-pulse.sh
 CODEX_PULSE_REASONING_EFFORT=xhigh ~/.codex/codex-pulse.sh
+CODEX_PULSE_PERMISSION_MODE=Plan ~/.codex/codex-pulse.sh
 CODEX_PULSE_LANG=fr ~/.codex/codex-pulse.sh
 ```
 
@@ -80,5 +82,6 @@ terminal_title = ["spinner", "project", "model"]
 - The 5h and weekly segments come from Codex's own local `rate_limits` event payload.
 - The Fast/Flex segment reads `service_tier` from `~/.codex/config.toml`.
 - The Think segment reads the active thread's `reasoning_effort`, then falls back to `model_reasoning_effort` in config.
+- The permission segment reads the latest `turn_context` first, then falls back to the active thread's `approval_mode` and `sandbox_policy`.
 - The layout intentionally mirrors `claude-pulse`: context has no bar, 5h has the visual bar, weekly shows the reset day.
 - If no session exists for the current directory, the script falls back to the latest unarchived Codex thread.

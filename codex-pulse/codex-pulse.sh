@@ -58,6 +58,7 @@ Environment:
   CODEX_PULSE_SESSION       Read a specific rollout JSONL file
   CODEX_PULSE_SERVICE_TIER  Override detected service tier
   CODEX_PULSE_REASONING_EFFORT Override detected thinking mode
+  CODEX_PULSE_PERMISSION_MODE Override detected permission mode
   CODEX_PULSE_BAR_WIDTH     Default: 8
   CODEX_PULSE_TAIL_LINES    Default: 2000
 EOF
@@ -416,6 +417,8 @@ find_latest_thread() {
     if [ "$SESSION_PATH" != "" ]; then
         MODEL="${CODEX_PULSE_MODEL:-Codex}"
         REASONING_EFFORT="${CODEX_PULSE_REASONING_EFFORT:-$(config_value model_reasoning_effort)}"
+        APPROVAL_MODE="${CODEX_PULSE_APPROVAL_MODE:-}"
+        SANDBOX_POLICY="${CODEX_PULSE_SANDBOX_POLICY:-}"
         DB_TOKENS=""
         ROLLOUT_PATH="$SESSION_PATH"
         return 0
@@ -425,16 +428,16 @@ find_latest_thread() {
     command -v sqlite3 >/dev/null 2>&1 || return 1
 
     cwd_sql=$(sql_escape "$PULSE_CWD")
-    query="select coalesce(model,''), coalesce(reasoning_effort,''), coalesce(tokens_used,0), rollout_path from threads where archived = 0 and cwd = '$cwd_sql' order by coalesce(updated_at_ms, updated_at * 1000) desc, id desc limit 1;"
+    query="select coalesce(model,''), coalesce(reasoning_effort,''), coalesce(tokens_used,0), rollout_path, coalesce(approval_mode,''), coalesce(sandbox_policy,'') from threads where archived = 0 and cwd = '$cwd_sql' order by coalesce(updated_at_ms, updated_at * 1000) desc, id desc limit 1;"
     row=$(sqlite3 -noheader -separator $'\t' "$STATE_DB" "$query" 2>/dev/null | head -n 1)
 
     if [ "$row" = "" ]; then
-        query="select coalesce(model,''), coalesce(reasoning_effort,''), coalesce(tokens_used,0), rollout_path from threads where archived = 0 order by coalesce(updated_at_ms, updated_at * 1000) desc, id desc limit 1;"
+        query="select coalesce(model,''), coalesce(reasoning_effort,''), coalesce(tokens_used,0), rollout_path, coalesce(approval_mode,''), coalesce(sandbox_policy,'') from threads where archived = 0 order by coalesce(updated_at_ms, updated_at * 1000) desc, id desc limit 1;"
         row=$(sqlite3 -noheader -separator $'\t' "$STATE_DB" "$query" 2>/dev/null | head -n 1)
     fi
 
     [ "$row" != "" ] || return 1
-    IFS=$'\t' read -r MODEL REASONING_EFFORT DB_TOKENS ROLLOUT_PATH <<< "$row"
+    IFS=$'\t' read -r MODEL REASONING_EFFORT DB_TOKENS ROLLOUT_PATH APPROVAL_MODE SANDBOX_POLICY <<< "$row"
     [ "$MODEL" != "" ] || MODEL="Codex"
     [ "$REASONING_EFFORT" != "" ] || REASONING_EFFORT="$(config_value model_reasoning_effort)"
     [ "$ROLLOUT_PATH" != "" ] || return 1
@@ -449,17 +452,68 @@ latest_payload() {
         | tail -n 1
 }
 
+latest_turn_context() {
+    [ -r "$ROLLOUT_PATH" ] || return 1
+    command -v jq >/dev/null 2>&1 || return 1
+
+    tail -n "$TAIL_LINES" "$ROLLOUT_PATH" 2>/dev/null \
+        | jq -rc 'select(.type == "turn_context") | .payload' 2>/dev/null \
+        | tail -n 1
+}
+
 jq_value() {
     local json="$1"
     local expr="$2"
     printf "%s" "$json" | jq -r "$expr // empty" 2>/dev/null
 }
 
+permission_mode_label() {
+    local turn_context="$1"
+    local collaboration_mode approval_mode sandbox_type label
+
+    if [ "${CODEX_PULSE_PERMISSION_MODE:-}" != "" ]; then
+        printf "%s" "$CODEX_PULSE_PERMISSION_MODE"
+        return
+    fi
+
+    collaboration_mode=$(jq_value "$turn_context" '.collaboration_mode.mode')
+    approval_mode=$(jq_value "$turn_context" '.approval_policy')
+    sandbox_type=$(jq_value "$turn_context" '.sandbox_policy.type')
+
+    [ "$approval_mode" != "" ] || approval_mode="${APPROVAL_MODE:-}"
+    if [ "$sandbox_type" = "" ] && [ "${SANDBOX_POLICY:-}" != "" ] && command -v jq >/dev/null 2>&1; then
+        sandbox_type=$(printf "%s" "$SANDBOX_POLICY" | jq -r '.type // empty' 2>/dev/null)
+    fi
+
+    case "$collaboration_mode" in
+        plan)
+            label="Plan"
+            ;;
+        *)
+            case "$sandbox_type:$approval_mode" in
+                danger-full-access:*|*:never)
+                    label="Bypass"
+                    ;;
+                *:on-request|*:on-failure|*:always|*:untrusted)
+                    label="Ask"
+                    ;;
+                *)
+                    label=""
+                    ;;
+            esac
+            ;;
+    esac
+
+    printf "%s" "$label"
+}
+
 mode_segment() {
-    local service_tier reasoning label=""
+    local service_tier reasoning permission turn_context label=""
 
     service_tier="${CODEX_PULSE_SERVICE_TIER:-$(config_value service_tier)}"
     reasoning="${CODEX_PULSE_REASONING_EFFORT:-${REASONING_EFFORT:-$(config_value model_reasoning_effort)}}"
+    turn_context=$(latest_turn_context || true)
+    permission=$(permission_mode_label "$turn_context")
 
     case "$service_tier" in
         fast)
@@ -481,6 +535,14 @@ mode_segment() {
             label="$label · Think $reasoning"
         else
             label="Think $reasoning"
+        fi
+    fi
+
+    if [ "$permission" != "" ]; then
+        if [ "$label" != "" ]; then
+            label="$label · $permission"
+        else
+            label="$permission"
         fi
     fi
 
