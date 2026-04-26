@@ -1,0 +1,3 @@
+[tui]
+status_line = ["model", "used-tokens", "context-used", "five-hour-limit", "weekly-limit", "fast-mode"]
+terminal_title = ["spinner", "project", "model"]

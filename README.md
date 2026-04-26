@@ -21,6 +21,19 @@ curl -sS https://raw.githubusercontent.com/Haidy-ID/claude-pulse/main/install.sh
 
 Restart Claude Code. That's it.
 
+## Codex variant
+
+Codex CLI does not expose a Claude Code-style `statusline` shell hook, so [`codex-pulse/`](codex-pulse/) ships a graphical sidecar instead. It reads Codex's local session events, renders the missing bars, and also configures the native `tui.status_line` as a fallback.
+
+```bash
+cd codex-pulse
+./install.sh
+```
+
+```bash
+~/.codex/codex-pulse.sh --watch
+```
+
 ### Manual install
 
 ```bash
