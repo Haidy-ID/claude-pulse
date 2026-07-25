@@ -2,7 +2,8 @@
 # claude-pulse — Status line for Claude Code
 # https://github.com/Haidy-ID/claude-pulse
 #
-# Layout: ● Model │ used·total XX% │ Xh XX% [████░░░░] │ Xj XX% Day
+# Layout: ● Model·effort │ used/total XX% │ Xh XX% [████░░░░] │ Xj XX% Day
+#         Last done: <what Claude just finished>   (optional second row)
 
 input=$(cat)
 
@@ -123,12 +124,17 @@ day_name() {
 }
 
 # === PARSE STATUS JSON ===
+# Fields are joined with US (0x1f), not a tab: tab is IFS whitespace, so bash
+# would collapse runs of them and an empty field — an absent effort level, a
+# missing session id — would silently shift every field after it.
 json_data=$(echo "$input" | jq -r '
     [
         (.context_window.used_percentage // -1),
         (.context_window.context_window_size // 200000),
+        (.session_id // ""),
+        (.effort.level // ""),
         (.model.display_name // .model.id // "Unknown")
-    ] | @tsv
+    ] | map(tostring) | join("\u001f")
 ' 2>/dev/null)
 
 if [ -z "$json_data" ]; then
@@ -136,7 +142,8 @@ if [ -z "$json_data" ]; then
     exit 0
 fi
 
-IFS=$'\t' read -r ctx_pct_raw ctx_size_raw model_name <<< "$json_data"
+# model_name is last: it may contain spaces and absorbs the remainder.
+IFS=$'\x1f' read -r ctx_pct_raw ctx_size_raw session_id effort_level model_name <<< "$json_data"
 
 ctx_pct=$(safe_int "$ctx_pct_raw")
 [ "$ctx_pct" -lt 0 ] 2>/dev/null && ctx_pct=0
@@ -152,6 +159,16 @@ ctx_color=$(gauge_color "$ctx_pct")
 [ -z "$model_name" ] || [ "$model_name" = "null" ] && model_name="?"
 model_short="${model_name#Claude }"
 model_short="${model_short%% *}"
+
+# Reasoning effort: low | medium | high | xhigh | max. The field is absent
+# whenever the current model has no effort parameter, so the whole segment —
+# separator included — disappears rather than leaving a dangling dot.
+# Set CLAUDE_PULSE_EFFORT=0 to hide it.
+effort_display=""
+if [ "${CLAUDE_PULSE_EFFORT:-1}" != "0" ] \
+   && [ -n "$effort_level" ] && [ "$effort_level" != "null" ]; then
+    effort_display="${c_dim}·${effort_level}${R}"
+fi
 
 # === STATE (spike damping) ===
 STATE_FILE="$HOME/.claude/pulse-state.json"
@@ -315,5 +332,67 @@ for ((i=0; i<filled; i++)); do progress_bar+="${plan_color}█"; done
 for ((i=filled; i<bar_length; i++)); do progress_bar+="${c_dim}░"; done
 progress_bar+="${R}"
 
+# === LAST DONE (second row) ===
+# Fed by claude-pulse-lastdone.sh, a Stop hook that records what Claude just
+# finished, keyed by session. The row is omitted entirely when there is nothing
+# to show, so it never costs a terminal line for free.
+# Set CLAUDE_PULSE_LASTDONE=0 to disable.
+LASTDONE_LABEL="Last done:"
+LASTDONE_MAXROWS="${CLAUDE_PULSE_LASTDONE_ROWS:-2}"
+lastdone_out=""
+
+if [ "${CLAUDE_PULSE_LASTDONE:-1}" != "0" ] && [ -n "$session_id" ]; then
+    LASTDONE_DIR="${CLAUDE_PULSE_LASTDONE_DIR:-$HOME/.claude/pulse-lastdone}"
+    lastdone_file="$LASTDONE_DIR/$session_id"
+
+    if [ -f "$lastdone_file" ]; then
+        lastdone_text=$(head -1 "$lastdone_file" 2>/dev/null)
+
+        if [ -n "$lastdone_text" ]; then
+            # Claude Code cannot expose the terminal to the script, so tput is
+            # useless here; it exports COLUMNS instead (v2.1.153+).
+            width=$(safe_int "${COLUMNS:-0}")
+            [ "$width" -lt 20 ] 2>/dev/null && width=100
+
+            # Wrap as plain text, then colorize — keeps ANSI out of the width math.
+            wrapped=$(printf '%s %s\n' "$LASTDONE_LABEL" "$lastdone_text" | awk \
+                -v width="$width" -v maxrows="$LASTDONE_MAXROWS" '
+                {
+                    n = split($0, word, " ")
+                    cnt = 0; line = ""
+                    for (i = 1; i <= n; i++) {
+                        cand = (line == "" ? word[i] : line " " word[i])
+                        if (length(cand) <= width || line == "") line = cand
+                        else { rows[++cnt] = line; line = word[i] }
+                    }
+                    if (line != "") rows[++cnt] = line
+                    out = (cnt > maxrows ? maxrows : cnt)
+                    for (i = 1; i <= out; i++) {
+                        r = rows[i]
+                        if (i == out && cnt > maxrows) {
+                            if (length(r) > width - 1) r = substr(r, 1, width - 1)
+                            r = r "…"
+                        }
+                        print r
+                    }
+                }
+            ')
+
+            label_len=${#LASTDONE_LABEL}
+            first_row=1
+            while IFS= read -r row; do
+                [ -z "$row" ] && continue
+                if [ "$first_row" -eq 1 ]; then
+                    # Split the fixed-width ASCII label off to colour it apart.
+                    lastdone_out+="\n${c_white}${B}${row:0:$label_len}${R}${c_dim}${row:$label_len}${R}"
+                    first_row=0
+                else
+                    lastdone_out+="\n${c_dim}${row}${R}"
+                fi
+            done <<< "$wrapped"
+        fi
+    fi
+fi
+
 # === OUTPUT ===
-printf "%b" "${c_white}● ${B}${model_short}${R}${SEP}${c_dim}${ctx_display} ${ctx_color}${B}${ctx_pct}%${R}${SEP}${c_dim}${label_5h} ${plan_color}${B}${plan_pct}%${R} ${progress_bar}${R}${SEP}${c_dim}${label_7d} ${week_color}${B}${week_pct}%${R}${label_7d_reset:+${c_dim}${label_7d_reset}}${R}"
+printf "%b" "${c_white}● ${B}${model_short}${R}${effort_display}${SEP}${c_dim}${ctx_display} ${ctx_color}${B}${ctx_pct}%${R}${SEP}${c_dim}${label_5h} ${plan_color}${B}${plan_pct}%${R} ${progress_bar}${R}${SEP}${c_dim}${label_7d} ${week_color}${B}${week_pct}%${R}${label_7d_reset:+${c_dim}${label_7d_reset}}${R}${lastdone_out}"

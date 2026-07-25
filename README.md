@@ -7,9 +7,11 @@
 ## What you get
 
 - **Context window** — tokens used vs total, so you know if you're in 200k or 1M mode
+- **Reasoning effort** — pinned next to the model name, live through mid-session `/effort` changes
 - **5h rate limit** — live countdown + percentage + visual bar. No more surprise throttling
 - **7d weekly quota** — because burning 80% on Monday is a lifestyle choice
 - **Smart colors** — white when chill, amber at 50%, red at 80%. Pulse animation when you're cooked
+- **Last done** — an optional second row telling you what Claude just finished, so you can look away and come back
 - **Spike damping** — no false 100% spikes from API hiccups
 - **Atomic writes** — no race conditions between concurrent refreshes
 
@@ -37,13 +39,33 @@ cd codex-pulse
 ### Manual install
 
 ```bash
-# Download
 curl -sS https://raw.githubusercontent.com/Haidy-ID/claude-pulse/main/claude-pulse.sh -o ~/.claude/claude-pulse.sh
-
-# Enable
-# Add to ~/.claude/settings.json:
-# "statusline": "bash ~/.claude/claude-pulse.sh"
+curl -sS https://raw.githubusercontent.com/Haidy-ID/claude-pulse/main/claude-pulse-lastdone.sh -o ~/.claude/claude-pulse-lastdone.sh
+chmod +x ~/.claude/claude-pulse.sh ~/.claude/claude-pulse-lastdone.sh
 ```
+
+Then add to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "bash ~/.claude/claude-pulse.sh"
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "bash ~/.claude/claude-pulse-lastdone.sh", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The `hooks` block only powers the **Last done** row — skip it and the status line still works, it just stays on one line. If you already have `Stop` hooks, append to the array instead of replacing it.
 
 ## Requirements
 
@@ -63,13 +85,15 @@ curl -sS https://raw.githubusercontent.com/Haidy-ID/claude-pulse/main/claude-pul
 ## Layout breakdown
 
 ```
-● Opus │ 60k·200k 30% │ 2h51 2% ░░░░░░░░ │ 3j 29% Ven.
+● Opus·high │ 60k/200k 30% │ 2h51 2% ░░░░░░░░ │ 3j 29% Ven.
+Last done: Le hook Stop écrit désormais un fichier par session.
 ```
 
 | Segment | Description |
 |---------|-------------|
 | `● Opus` | Active model (compact name) |
-| `60k·200k` | Tokens used · context window size |
+| `·high` | Reasoning effort — `low`, `medium`, `high`, `xhigh`, `max` (hidden when the model has none) |
+| `60k/200k` | Tokens used / context window size |
 | `30%` | Context usage (white → amber → red) |
 | `2h51` | Time until 5h rate limit resets |
 | `2%` | Current 5h utilization |
@@ -77,6 +101,27 @@ curl -sS https://raw.githubusercontent.com/Haidy-ID/claude-pulse/main/claude-pul
 | `3j` | Days until weekly reset |
 | `29%` | Weekly quota used |
 | `Ven.` | Weekly reset day (< 48h shows exact time) |
+| `Last done:` | What Claude finished on its last turn (row omitted when empty) |
+
+## Last done
+
+A second row that answers "what did it just do?" without scrolling back up.
+
+A `Stop` hook fires when Claude finishes a turn. It reads the `last_assistant_message` field Claude Code hands it, keeps the first line that reads like a statement — skipping code fences, headings, bullets, tables and questions — trims it to its leading sentences, and stores it under `~/.claude/pulse-lastdone/<session_id>`. The status line reads that file and wraps it to `COLUMNS`.
+
+Per session, so switching sessions shows that session's own line. When a turn ends on a question or on nothing quotable, the previous line stays rather than blanking.
+
+One punchy opener — "Shipped." — says nothing on its own, so the hook keeps taking sentences until it has at least `MINLEN` characters of substance. It stops early at a question: whatever came before it is still worth showing.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `CLAUDE_PULSE_LASTDONE` | `1` | Set to `0` to hide the row (the hook keeps recording) |
+| `CLAUDE_PULSE_LASTDONE_ROWS` | `2` | Max rows the summary may wrap onto |
+| `CLAUDE_PULSE_LASTDONE_MINLEN` | `55` | Keep adding sentences until the summary is at least this long |
+| `CLAUDE_PULSE_LASTDONE_MAXLEN` | `220` | Max characters stored per summary |
+| `CLAUDE_PULSE_LASTDONE_DIR` | `~/.claude/pulse-lastdone` | Where summaries are stored |
+
+Credit where due: the idea, the name and the collapse-to-one-line behavior are lifted from [`pi-tasks`](https://github.com/earendil-works/pi-mono), an extension for the `pi` coding agent.
 
 ## Under the hood
 
@@ -90,14 +135,27 @@ Stuff you didn't ask for but we built anyway:
 - **Auto-compact model name** — `Claude Opus 4.6` becomes `Opus`. You know what model you're using, you don't need the full résumé
 - **`timeout` fallback** — Git Bash on Windows doesn't always have `timeout`. Pulse detects this and skips it instead of hanging
 - **Locale-free French days** — Day names (`Lun.`, `Mar.`, `Ven.`) are hardcoded from `%u` weekday numbers. Works on any system, no `fr_FR.UTF-8` locale needed
+- **Colour-blind wrapping** — The Last done row is wrapped as plain text *then* colored, so ANSI escapes never leak into the width arithmetic. Claude Code doesn't hand your script a terminal, so `tput cols` returns nothing useful — pulse reads the `COLUMNS` variable Claude Code exports instead (needs v2.1.153+)
+- **Never blanks on a question** — If a turn ends on a question or on nothing but code, the Last done hook exits without writing. The previous answer stays up instead of flickering to empty
+- **Unit-separator field parsing** — The status JSON is unpacked with `US` (0x1f), not a tab. Tab is IFS whitespace, so bash collapses runs of them: one empty field — an absent effort level, a missing session id — would silently shift every field after it and print the model name in the wrong slot
+
+## Configuration
+
+Everything is off-by-default-safe and driven by environment variables. See [Last done](#last-done) for that row's own settings.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `CLAUDE_PULSE_LANG` | auto | `en` or `fr`, for day names. Auto-detected from `LC_TIME`/`LANG` |
+| `CLAUDE_PULSE_EFFORT` | `1` | Set to `0` to hide the effort segment |
 
 ## How it works
 
 1. Reads Claude Code's status JSON from stdin (built-in hook)
 2. Fetches rate limit data from Anthropic's OAuth usage API (cached 60s)
 3. Renders a compact, colored status line
+4. Optionally reads the Last done summary a `Stop` hook left behind for this session
 
-No background processes. No daemon. No config files to maintain. It's a bash script that reads stdin and prints a string. Peak simplicity.
+No background processes. No daemon. No config files to maintain. Two bash scripts that read stdin and write a string. Peak simplicity.
 
 ## Credits
 

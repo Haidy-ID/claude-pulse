@@ -4,10 +4,13 @@
 
 set -e
 
-REPO_URL="https://raw.githubusercontent.com/Haidy-ID/claude-pulse/main/claude-pulse.sh"
+RAW_BASE="https://raw.githubusercontent.com/Haidy-ID/claude-pulse/main"
 INSTALL_DIR="$HOME/.claude"
 SCRIPT_NAME="claude-pulse.sh"
+HOOK_NAME="claude-pulse-lastdone.sh"
 SETTINGS_FILE="$INSTALL_DIR/settings.json"
+STATUSLINE_CMD="bash ~/.claude/$SCRIPT_NAME"
+HOOK_CMD="bash ~/.claude/$HOOK_NAME"
 
 # Colors
 GREEN="\033[38;2;52;211;153m"
@@ -36,38 +39,55 @@ ok "Dependencies OK (curl, jq)"
 [ -d "$INSTALL_DIR" ] || fail "$INSTALL_DIR not found — is Claude Code installed?"
 ok "Claude Code directory found"
 
-# Download script
-info "Downloading claude-pulse.sh..."
-curl -sS "$REPO_URL" -o "$INSTALL_DIR/$SCRIPT_NAME"
+# Download scripts
+info "Downloading $SCRIPT_NAME..."
+curl -sS "$RAW_BASE/$SCRIPT_NAME" -o "$INSTALL_DIR/$SCRIPT_NAME"
 chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
-ok "Script installed to $INSTALL_DIR/$SCRIPT_NAME"
+ok "Status line installed to $INSTALL_DIR/$SCRIPT_NAME"
+
+info "Downloading $HOOK_NAME..."
+curl -sS "$RAW_BASE/$HOOK_NAME" -o "$INSTALL_DIR/$HOOK_NAME"
+chmod +x "$INSTALL_DIR/$HOOK_NAME"
+ok "Last done hook installed to $INSTALL_DIR/$HOOK_NAME"
 
 # Configure settings.json
-if [ -f "$SETTINGS_FILE" ]; then
-    # Check if statusline is already configured
-    current=$(jq -r '.statusline // ""' "$SETTINGS_FILE" 2>/dev/null)
-    if [ -n "$current" ] && [ "$current" != "null" ]; then
-        warn "statusline already configured in settings.json"
-        printf "  ${DIM}Current: %s${R}\n" "$current"
-        printf "  ${WHITE}Replace with claude-pulse? [y/N] ${R}"
-        read -r reply
-        if [[ ! "$reply" =~ ^[Yy]$ ]]; then
-            info "Skipped settings update. To enable manually, add to $SETTINGS_FILE:"
-            printf "  ${DIM}\"statusline\": \"bash ~/.claude/claude-pulse.sh\"${R}\n"
-            echo ""
-            exit 0
-        fi
-    fi
-    # Update settings
-    tmp="${SETTINGS_FILE}.tmp.$$"
-    jq '.statusline = "bash ~/.claude/claude-pulse.sh"' "$SETTINGS_FILE" > "$tmp" && mv -f "$tmp" "$SETTINGS_FILE"
-else
-    # Create settings
-    printf '{\n  "statusline": "bash ~/.claude/claude-pulse.sh"\n}\n' > "$SETTINGS_FILE"
+[ -f "$SETTINGS_FILE" ] || printf '{}\n' > "$SETTINGS_FILE"
+
+jq empty "$SETTINGS_FILE" 2>/dev/null || fail "$SETTINGS_FILE is not valid JSON — fix it first"
+
+backup="${SETTINGS_FILE}.bak-claude-pulse-$(date +%Y%m%d-%H%M%S)"
+cp "$SETTINGS_FILE" "$backup"
+ok "Settings backed up to $backup"
+
+# statusLine is an object, not a string. Ask before displacing another one.
+current=$(jq -r '.statusLine.command // .statusLine // ""' "$SETTINGS_FILE" 2>/dev/null)
+set_statusline=1
+if [ -n "$current" ] && [ "$current" != "null" ] && [ "$current" != "$STATUSLINE_CMD" ]; then
+    warn "A status line is already configured"
+    printf "  ${DIM}Current: %s${R}\n" "$current"
+    printf "  ${WHITE}Replace with claude-pulse? [y/N] ${R}"
+    read -r reply
+    [[ "$reply" =~ ^[Yy]$ ]] || set_statusline=0
 fi
-ok "Settings configured"
+
+tmp="${SETTINGS_FILE}.tmp.$$"
+jq --arg sl "$STATUSLINE_CMD" --arg hk "$HOOK_CMD" --argjson setsl "$set_statusline" '
+    # Status line
+    (if $setsl == 1 then .statusLine = {type: "command", command: $sl} else . end)
+    # Stop hook: append, never displace hooks that are already there
+    | (if ([.hooks.Stop[]?.hooks[]?.command] | index($hk)) then .
+       else .hooks.Stop = ((.hooks.Stop // []) + [{
+                matcher: "",
+                hooks: [{type: "command", command: $hk, timeout: 5}]
+            }])
+       end)
+' "$SETTINGS_FILE" > "$tmp" && mv -f "$tmp" "$SETTINGS_FILE"
+
+[ "$set_statusline" -eq 1 ] && ok "Status line configured" || info "Status line left untouched"
+ok "Last done Stop hook registered"
 
 echo ""
 printf "${GREEN}${BOLD}Done!${R} Restart Claude Code to see the pulse.\n"
-printf "${DIM}Layout: ● Opus │ 60k·200k 30%% │ 4h12 2%% ░░░░░░░░ │ 4j 27%% Ven.${R}\n"
+printf "${DIM}● Opus │ 60k/200k 30%% │ 4h12 2%% ░░░░░░░░ │ 4d 27%% Fri${R}\n"
+printf "${DIM}Last done: The status line now carries a second row.${R}\n"
 echo ""
