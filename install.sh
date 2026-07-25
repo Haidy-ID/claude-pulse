@@ -55,10 +55,6 @@ ok "Last done hook installed to $INSTALL_DIR/$HOOK_NAME"
 
 jq empty "$SETTINGS_FILE" 2>/dev/null || fail "$SETTINGS_FILE is not valid JSON — fix it first"
 
-backup="${SETTINGS_FILE}.bak-claude-pulse-$(date +%Y%m%d-%H%M%S)"
-cp "$SETTINGS_FILE" "$backup"
-ok "Settings backed up to $backup"
-
 # statusLine is an object, not a string. Ask before displacing another one.
 current=$(jq -r '.statusLine.command // .statusLine // ""' "$SETTINGS_FILE" 2>/dev/null)
 set_statusline=1
@@ -81,10 +77,22 @@ jq --arg sl "$STATUSLINE_CMD" --arg hk "$HOOK_CMD" --argjson setsl "$set_statusl
                 hooks: [{type: "command", command: $hk, timeout: 5}]
             }])
        end)
-' "$SETTINGS_FILE" > "$tmp" && mv -f "$tmp" "$SETTINGS_FILE"
+' "$SETTINGS_FILE" > "$tmp"
 
-[ "$set_statusline" -eq 1 ] && ok "Status line configured" || info "Status line left untouched"
-ok "Last done Stop hook registered"
+# Back up only when something is actually about to change. Re-running the
+# installer to pick up an update is a no-op, and a no-op should not leave
+# another timestamped copy of settings.json behind forever.
+if cmp -s "$tmp" "$SETTINGS_FILE"; then
+    rm -f "$tmp"
+    info "Settings already up to date"
+else
+    backup="${SETTINGS_FILE}.bak-claude-pulse-$(date +%Y%m%d-%H%M%S)"
+    cp "$SETTINGS_FILE" "$backup"
+    ok "Settings backed up to $backup"
+    mv -f "$tmp" "$SETTINGS_FILE"
+    [ "$set_statusline" -eq 1 ] && ok "Status line configured" || info "Status line left untouched"
+    ok "Last done Stop hook registered"
+fi
 
 echo ""
 printf "${GREEN}${BOLD}Done!${R} Restart Claude Code to see the pulse.\n"

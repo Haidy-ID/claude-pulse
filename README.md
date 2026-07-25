@@ -136,6 +136,7 @@ Stuff you didn't ask for but we built anyway:
 - **`timeout` fallback** — Git Bash on Windows doesn't always have `timeout`. Pulse detects this and skips it instead of hanging
 - **Locale-free French days** — Day names (`Lun.`, `Mar.`, `Ven.`) are hardcoded from `%u` weekday numbers. Works on any system, no `fr_FR.UTF-8` locale needed
 - **Colour-blind wrapping** — The Last done row is wrapped as plain text *then* colored, so ANSI escapes never leak into the width arithmetic. Claude Code doesn't hand your script a terminal, so `tput cols` returns nothing useful — pulse reads the `COLUMNS` variable Claude Code exports instead (needs v2.1.153+)
+- **Fork-free hot path** — The status line re-runs on every UI event, so the Last done row is wrapped and colored entirely with bash builtins. No `head`, no `awk`, no subshell: the feature costs zero extra processes per render. It also means accented text wraps by character count rather than byte count — macOS `awk` reports `éèàùç` as 10 units long, bash reports 5, and only one of those is a terminal column
 - **Never blanks on a question** — If a turn ends on a question or on nothing but code, the Last done hook exits without writing. The previous answer stays up instead of flickering to empty
 - **Unit-separator field parsing** — The status JSON is unpacked with `US` (0x1f), not a tab. Tab is IFS whitespace, so bash collapses runs of them: one empty field — an absent effort level, a missing session id — would silently shift every field after it and print the model name in the wrong slot
 

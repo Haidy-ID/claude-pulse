@@ -332,67 +332,80 @@ for ((i=0; i<filled; i++)); do progress_bar+="${plan_color}█"; done
 for ((i=filled; i<bar_length; i++)); do progress_bar+="${c_dim}░"; done
 progress_bar+="${R}"
 
+# === EXTRA ROWS ===
+# Append a secondary row: a bold label, then dim text word-wrapped to the
+# terminal width over at most $3 rows, the last one elided if it overflows.
+# Built entirely from bash builtins — this runs on every status line render,
+# so it stays fork-free. Wrapping is measured on plain text and coloured
+# afterwards, which keeps ANSI escapes out of the width arithmetic.
+extra_rows=""
+
+append_row() {
+    local label=$1 text=$2 maxrows=$3
+    local IFS=$' \t\n'
+
+    # Claude Code cannot expose the terminal to the script, so tput is useless
+    # here; it exports COLUMNS instead (v2.1.153+).
+    local width=${COLUMNS:-0}
+    [[ "$width" =~ ^[0-9]+$ ]] || width=0
+    (( width < 20 )) && width=100
+
+    local -a words=() rows=()
+    read -ra words <<< "$label $text"
+
+    local line="" cand w
+    for w in "${words[@]}"; do
+        cand="${line:+$line }$w"
+        if (( ${#cand} <= width )) || [ -z "$line" ]; then
+            line=$cand
+        else
+            rows+=("$line")
+            line=$w
+        fi
+    done
+    [ -n "$line" ] && rows+=("$line")
+
+    local total=${#rows[@]} shown=${#rows[@]} i r
+    (( shown > maxrows )) && shown=$maxrows
+    for (( i = 0; i < shown; i++ )); do
+        r=${rows[i]}
+        if (( i == shown - 1 && total > maxrows )); then
+            (( ${#r} > width - 1 )) && r=${r:0:width-1}
+            # Braces are load-bearing: bash 3.2 — still the system bash on
+            # macOS — reads the leading byte of a multi-byte character as part
+            # of the variable name, so "$r…" expands the wrong name entirely.
+            r="${r}…"
+        fi
+        if (( i == 0 )); then
+            # Split the fixed-width ASCII label off to colour it apart.
+            extra_rows+="\n${c_white}${B}${r:0:${#label}}${R}${c_dim}${r:${#label}}${R}"
+        else
+            extra_rows+="\n${c_dim}${r}${R}"
+        fi
+    done
+}
+
 # === LAST DONE (second row) ===
 # Fed by claude-pulse-lastdone.sh, a Stop hook that records what Claude just
 # finished, keyed by session. The row is omitted entirely when there is nothing
 # to show, so it never costs a terminal line for free.
 # Set CLAUDE_PULSE_LASTDONE=0 to disable.
-LASTDONE_LABEL="Last done:"
-LASTDONE_MAXROWS="${CLAUDE_PULSE_LASTDONE_ROWS:-2}"
-lastdone_out=""
+add_lastdone() {
+    [ "${CLAUDE_PULSE_LASTDONE:-1}" = "0" ] && return
+    [ -n "$session_id" ] || return
 
-if [ "${CLAUDE_PULSE_LASTDONE:-1}" != "0" ] && [ -n "$session_id" ]; then
-    LASTDONE_DIR="${CLAUDE_PULSE_LASTDONE_DIR:-$HOME/.claude/pulse-lastdone}"
-    lastdone_file="$LASTDONE_DIR/$session_id"
+    local file="${CLAUDE_PULSE_LASTDONE_DIR:-$HOME/.claude/pulse-lastdone}/$session_id"
+    [ -f "$file" ] || return
 
-    if [ -f "$lastdone_file" ]; then
-        lastdone_text=$(head -1 "$lastdone_file" 2>/dev/null)
+    # The hook writes a single line; read it with the builtin, not `head`.
+    local text=""
+    IFS= read -r text < "$file" 2>/dev/null
+    [ -n "$text" ] || return
 
-        if [ -n "$lastdone_text" ]; then
-            # Claude Code cannot expose the terminal to the script, so tput is
-            # useless here; it exports COLUMNS instead (v2.1.153+).
-            width=$(safe_int "${COLUMNS:-0}")
-            [ "$width" -lt 20 ] 2>/dev/null && width=100
+    append_row "Last done:" "$text" "${CLAUDE_PULSE_LASTDONE_ROWS:-2}"
+}
 
-            # Wrap as plain text, then colorize — keeps ANSI out of the width math.
-            wrapped=$(printf '%s %s\n' "$LASTDONE_LABEL" "$lastdone_text" | awk \
-                -v width="$width" -v maxrows="$LASTDONE_MAXROWS" '
-                {
-                    n = split($0, word, " ")
-                    cnt = 0; line = ""
-                    for (i = 1; i <= n; i++) {
-                        cand = (line == "" ? word[i] : line " " word[i])
-                        if (length(cand) <= width || line == "") line = cand
-                        else { rows[++cnt] = line; line = word[i] }
-                    }
-                    if (line != "") rows[++cnt] = line
-                    out = (cnt > maxrows ? maxrows : cnt)
-                    for (i = 1; i <= out; i++) {
-                        r = rows[i]
-                        if (i == out && cnt > maxrows) {
-                            if (length(r) > width - 1) r = substr(r, 1, width - 1)
-                            r = r "…"
-                        }
-                        print r
-                    }
-                }
-            ')
-
-            label_len=${#LASTDONE_LABEL}
-            first_row=1
-            while IFS= read -r row; do
-                [ -z "$row" ] && continue
-                if [ "$first_row" -eq 1 ]; then
-                    # Split the fixed-width ASCII label off to colour it apart.
-                    lastdone_out+="\n${c_white}${B}${row:0:$label_len}${R}${c_dim}${row:$label_len}${R}"
-                    first_row=0
-                else
-                    lastdone_out+="\n${c_dim}${row}${R}"
-                fi
-            done <<< "$wrapped"
-        fi
-    fi
-fi
+add_lastdone
 
 # === OUTPUT ===
-printf "%b" "${c_white}● ${B}${model_short}${R}${effort_display}${SEP}${c_dim}${ctx_display} ${ctx_color}${B}${ctx_pct}%${R}${SEP}${c_dim}${label_5h} ${plan_color}${B}${plan_pct}%${R} ${progress_bar}${R}${SEP}${c_dim}${label_7d} ${week_color}${B}${week_pct}%${R}${label_7d_reset:+${c_dim}${label_7d_reset}}${R}${lastdone_out}"
+printf "%b" "${c_white}● ${B}${model_short}${R}${effort_display}${SEP}${c_dim}${ctx_display} ${ctx_color}${B}${ctx_pct}%${R}${SEP}${c_dim}${label_5h} ${plan_color}${B}${plan_pct}%${R} ${progress_bar}${R}${SEP}${c_dim}${label_7d} ${week_color}${B}${week_pct}%${R}${label_7d_reset:+${c_dim}${label_7d_reset}}${R}${extra_rows}"
